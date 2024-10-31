@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Button } from "@/components/ui/button";
-import { Upload } from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Upload, Map } from 'lucide-react';
 
 const MAPBOX_TOKEN = 'pk.eyJ1IjoiYmVybW9uZGV5IiwiYSI6ImNtMnZ4YzNuZzAwcDEycXM0bjUwdmc1OWkifQ.4mUWQlYMt_kH3GfVAptJBA';
 
@@ -8,50 +9,61 @@ const VisorRutasGPS = () => {
   const [rutas, setRutas] = useState([]);
   const [mapa, setMapa] = useState(null);
 
-  // Inicializar el mapa
+  // Función para parsear archivo GPX
+  const parseGPX = (xmlDoc) => {
+    const trackPoints = xmlDoc.getElementsByTagName('trkpt');
+    const puntos = [];
+    
+    for (let point of trackPoints) {
+      const lat = parseFloat(point.getAttribute('lat'));
+      const lon = parseFloat(point.getAttribute('lon'));
+      if (!isNaN(lat) && !isNaN(lon)) {
+        puntos.push([lon, lat]); // Mapbox espera [longitude, latitude]
+      }
+    }
+    
+    return puntos;
+  };
+
   useEffect(() => {
     // Cargar el script de Mapbox
-    const loadMapbox = async () => {
-      // Esperar a que se cargue el CSS
-      const link = document.createElement('link');
-      link.href = 'https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css';
-      link.rel = 'stylesheet';
-      document.head.appendChild(link);
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/mapbox-gl/2.15.0/mapbox-gl.js';
+    script.async = true;
+    document.body.appendChild(script);
 
-      // Esperar a que se cargue el JS
-      const script = document.createElement('script');
-      script.src = 'https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js';
-      script.async = true;
-      document.body.appendChild(script);
+    const link = document.createElement('link');
+    link.href = 'https://cdnjs.cloudflare.com/ajax/libs/mapbox-gl/2.15.0/mapbox-gl.css';
+    link.rel = 'stylesheet';
+    document.head.appendChild(link);
 
-      // Esperar a que el script se cargue
-      await new Promise((resolve) => {
-        script.onload = resolve;
+    script.onload = () => {
+      const mapboxgl = window.mapboxgl;
+      mapboxgl.accessToken = MAPBOX_TOKEN;
+
+      const mapaInstance = new mapboxgl.Map({
+        container: 'mapa',
+        style: 'mapbox://styles/mapbox/outdoors-v12',
+        center: [2.5, 42.5], // Centrado en los Pirineos
+        zoom: 9
       });
 
-      // Inicializar el mapa
-      if (window.mapboxgl) {
-        window.mapboxgl.accessToken = MAPBOX_TOKEN;
-        
-        const mapaInstance = new window.mapboxgl.Map({
-          container: 'mapa',
-          style: 'mapbox://styles/mapbox/outdoors-v12',
-          center: [2.5, 42.5], // Pirineos
-          zoom: 9
-        });
+      mapaInstance.addControl(new mapboxgl.NavigationControl(), 'top-right');
+      setMapa(mapaInstance);
 
-        // Añadir controles de navegación
-        mapaInstance.addControl(new window.mapboxgl.NavigationControl());
-
-        // Esperar a que el mapa se cargue
-        mapaInstance.on('load', () => {
-          setMapa(mapaInstance);
-          console.log('Mapa cargado correctamente');
-        });
-      }
+      // Esperar a que el mapa se cargue
+      mapaInstance.on('load', () => {
+        console.log('Mapa cargado correctamente');
+      });
     };
 
-    loadMapbox();
+    return () => {
+      if (mapa) {
+        mapa.remove();
+      }
+      document.body.removeChild(script);
+      document.head.removeChild(link);
+    };
   }, []);
 
   const manejarSubidaArchivo = (evento) => {
@@ -60,27 +72,30 @@ const VisorRutasGPS = () => {
       const lector = new FileReader();
       lector.onload = (e) => {
         try {
-          // Puntos de ejemplo (simular una ruta en los Pirineos)
-          const puntos = [
-            [0.7644, 42.6328],
-            [0.7978, 42.6397],
-            [0.8012, 42.6503]
-          ];
+          // Parsear el archivo GPX
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(e.target.result, 'text/xml');
+          const puntos = parseGPX(xmlDoc);
+
+          if (puntos.length === 0) {
+            console.error('No se encontraron puntos en el archivo GPX');
+            return;
+          }
 
           // Limpiar rutas anteriores
-          const rutasExistentes = mapa.getStyle().layers
-            .filter(layer => layer.id.startsWith('ruta-'))
-            .map(layer => layer.id);
-          
-          rutasExistentes.forEach(rutaId => {
-            mapa.removeLayer(rutaId);
-            mapa.removeSource(rutaId);
+          mapa.getStyle().layers.forEach(layer => {
+            if (layer.id.startsWith('ruta-')) {
+              mapa.removeLayer(layer.id);
+            }
+          });
+          Object.keys(mapa.getStyle().sources).forEach(source => {
+            if (source.startsWith('ruta-')) {
+              mapa.removeSource(source);
+            }
           });
 
-          // Añadir nueva ruta
+          // Añadir la nueva ruta
           const rutaId = `ruta-${Date.now()}`;
-          
-          // Añadir la fuente de datos
           mapa.addSource(rutaId, {
             type: 'geojson',
             data: {
@@ -93,7 +108,6 @@ const VisorRutasGPS = () => {
             }
           });
 
-          // Añadir la capa visual
           mapa.addLayer({
             id: rutaId,
             type: 'line',
@@ -103,42 +117,26 @@ const VisorRutasGPS = () => {
               'line-cap': 'round'
             },
             paint: {
-              'line-color': '#FF4500',
+              'line-color': '#ff4400',
               'line-width': 4
             }
           });
 
           // Ajustar la vista a la ruta
-          const bounds = new window.mapboxgl.LngLatBounds();
+          const bounds = new mapboxgl.LngLatBounds();
           puntos.forEach(point => bounds.extend(point));
-          
-          mapa.fitBounds(bounds, {
-            padding: 50
-          });
+          mapa.fitBounds(bounds, { padding: 50 });
 
-          // Añadir marcadores de inicio y fin
-          new window.mapboxgl.Marker({ color: '#32CD32' })
-            .setLngLat(puntos[0])
-            .setPopup(new window.mapboxgl.Popup().setHTML('Inicio'))
-            .addTo(mapa);
-
-          new window.mapboxgl.Marker({ color: '#FF4500' })
-            .setLngLat(puntos[puntos.length - 1])
-            .setPopup(new window.mapboxgl.Popup().setHTML('Fin'))
-            .addTo(mapa);
-
-          // Actualizar la lista de rutas
-          const nuevaRuta = {
+          // Actualizar lista de rutas
+          setRutas([...rutas, {
             nombre: archivo.name,
             fecha: new Date().toLocaleDateString(),
-            distanciaTotal: '10 km',
-            elevacionPositiva: '500 m'
-          };
+            puntos: puntos
+          }]);
 
-          setRutas(rutasActuales => [...rutasActuales, nuevaRuta]);
-
+          console.log('Ruta cargada correctamente:', puntos.length, 'puntos');
         } catch (error) {
-          console.error('Error al procesar la ruta:', error);
+          console.error('Error al analizar el archivo:', error);
         }
       };
       lector.readAsText(archivo);
@@ -146,73 +144,62 @@ const VisorRutasGPS = () => {
   };
 
   return (
-    <div className="h-screen p-4 bg-gray-50">
-      <div className="h-full max-w-7xl mx-auto">
-        <div className="h-full border rounded-lg bg-white shadow-sm">
-          {/* Header */}
-          <div className="p-4 border-b">
-            <div className="flex items-center justify-between">
-              <h1 className="text-xl font-semibold">Visor de Rutas GPS</h1>
-              <label className="cursor-pointer">
-                <input
-                  type="file"
-                  accept=".gpx,.kml"
-                  onChange={manejarSubidaArchivo}
-                  className="hidden"
-                  id="upload-gpx"
-                />
-                <Button 
-                  variant="default" 
-                  className="bg-orange-500 hover:bg-orange-600 text-white font-bold flex items-center gap-2"
-                  onClick={() => document.getElementById('upload-gpx').click()}
-                >
-                  <Upload size={16} />
-                  Subir Ruta
-                </Button>
-              </label>
-            </div>
-          </div>
-
-          {/* Contenido principal */}
-          <div className="h-[calc(100%-4rem)] p-4">
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-full">
-              {/* Lista de rutas */}
-              <div className="lg:col-span-1 border rounded-lg bg-white overflow-auto">
-                <div className="p-4">
-                  <h3 className="font-semibold mb-4">Tus Rutas</h3>
-                  <div className="space-y-2">
-                    {rutas.map((ruta, index) => (
-                      <div
-                        key={index}
-                        className="p-2 rounded cursor-pointer hover:bg-gray-100"
-                      >
-                        <div className="font-medium">{ruta.nombre}</div>
-                        <div className="text-sm text-gray-500">{ruta.fecha}</div>
-                        <div className="text-sm">
-                          Distancia: {ruta.distanciaTotal} • Desnivel: {ruta.elevacionPositiva}
-                        </div>
-                      </div>
-                    ))}
-                    {rutas.length === 0 && (
-                      <div className="text-center text-gray-500 py-8">
-                        <Upload className="mx-auto mb-2 opacity-50" size={24} />
-                        <p>Sube una ruta para empezar</p>
-                      </div>
-                    )}
+    <div className="max-w-6xl mx-auto p-4">
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Visor de Rutas GPS</span>
+            <label className="cursor-pointer">
+              <input
+                type="file"
+                accept=".gpx"
+                onChange={manejarSubidaArchivo}
+                className="hidden"
+              />
+              <Button 
+                variant="default"
+                className="bg-orange-500 hover:bg-orange-600 text-white font-bold flex items-center gap-2"
+              >
+                <Upload size={16} />
+                Subir Ruta GPS
+              </Button>
+            </label>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Lista de Rutas */}
+            <div className="border rounded-lg p-4">
+              <h3 className="font-semibold mb-4">Rutas Cargadas</h3>
+              <div className="space-y-2">
+                {rutas.map((ruta, index) => (
+                  <div
+                    key={index}
+                    className="p-2 rounded bg-gray-50"
+                  >
+                    <div className="font-medium">{ruta.nombre}</div>
+                    <div className="text-sm text-gray-500">{ruta.fecha}</div>
+                    <div className="text-sm text-gray-500">
+                      {ruta.puntos.length} puntos
+                    </div>
                   </div>
-                </div>
-              </div>
-
-              {/* Mapa */}
-              <div className="lg:col-span-3">
-                <div className="w-full h-[500px] border rounded-lg overflow-hidden relative">
-                  <div id="mapa" className="absolute inset-0" />
-                </div>
+                ))}
+                {rutas.length === 0 && (
+                  <div className="text-center text-gray-500 py-8">
+                    <Upload className="mx-auto mb-2 opacity-50" size={24} />
+                    <p>Sube un archivo GPX para empezar</p>
+                  </div>
+                )}
               </div>
             </div>
+
+            {/* Vista del Mapa */}
+            <div className="md:col-span-2 border rounded-lg overflow-hidden">
+              <div id="mapa" className="w-full h-[500px]" />
+            </div>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 };
